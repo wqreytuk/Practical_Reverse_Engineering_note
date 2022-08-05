@@ -1,10 +1,4 @@
-Title: Practical Reverse Engineering notes -- Part II
-Date: 2022-08-05
-Category: 逆向
-
-
-
-[https://github.com/wqreytuk/Practical_Reverse_Engineering_note](https://github.com/wqreytuk/Practical_Reverse_Engineering_note)
+[Practical Reverse Engineering notes -- Part II](http://144.34.164.217/practical-reverse-engineering-notes-part-ii.html)
 
 目录可能会稍微有点乱，不要介意，凑合看吧
 
