@@ -1,4 +1,10 @@
-[https://github.com/wqreytuk/Practical_Reverse_Engineering_note](https://github.com/wqreytuk/Practical_Reverse_Engineering_note)
+Title: Practical Reverse Engineering notes -- Part I
+Date: 2022-07-29
+Category: 逆向
+
+
+
+[Part I](https://github.com/wqreytuk/Practical_Reverse_Engineering_note/tree/main/Part%20I)
 
 目录可能会稍微有点乱，不要介意，凑合看吧
 
@@ -1376,6 +1382,40 @@ PLIST_ENTRY RemoveTailList(PLIST_ENTRY ListHead) {
 ![image-20220803213737231](https://img-blog.csdnimg.cn/468db7647ffd4de08ea1fdc2e1825287.png)
 
 edi和rdi是ListHead，ebx和rsi是Entry，eax和rax是要删除的节点Blink指向的节点
+
+
+
+*RemoveEntryList*
+
+x64下的汇编代码
+
+```
+fffff803`85c8aa8e 488b07          mov     rax,qword ptr [rdi]
+fffff803`85c8aa91 483bc7          cmp     rax,rdi
+fffff803`85c8aa94 0f8599000000    jne     nt!AlpcSectionDeleteProcedure+0x113 (fffff803`85c8ab33)  Branch
+fffff803`85c8ab33 488b4f08        mov     rcx,qword ptr [rdi+8]
+fffff803`85c8ab37 48397808        cmp     qword ptr [rax+8],rdi
+fffff803`85c8ab3b 7522            jne     nt!AlpcSectionDeleteProcedure+0x13f (fffff803`85c8ab5f)  Branch
+
+nt!AlpcSectionDeleteProcedure+0x11d:
+fffff803`85c8ab3d 483939          cmp     qword ptr [rcx],rdi
+fffff803`85c8ab40 751d            jne     nt!AlpcSectionDeleteProcedure+0x13f (fffff803`85c8ab5f)  Branch
+
+nt!AlpcSectionDeleteProcedure+0x122:
+fffff803`85c8ab42 488901          mov     qword ptr [rcx],rax
+fffff803`85c8ab45 48894808        mov     qword ptr [rax+8],rcx
+fffff803`85c8ab49 48897f08        mov     qword ptr [rdi+8],rdi
+fffff803`85c8ab4d 48893f          mov     qword ptr [rdi],rdi
+```
+这是链表删除节点之前的样子
+
+![image-20220806014007312](https://img-blog.csdnimg.cn/612043081f934c76a7cf9e66acc41b4c.png)
+
+这是删除之后的样子
+
+![image-20220806013944016](https://img-blog.csdnimg.cn/30f8dd61c4a34018a99b46e833d7c4bb.png)
+
+可以看到*RemoveEntryList*除了将要删除节点的前后节点的Flink和Blink进行更改之外，还将要删除节点的Flink和Blink都指向了自己从而使得要删除的节点和原始链表彻底失去联系
 
 
 
