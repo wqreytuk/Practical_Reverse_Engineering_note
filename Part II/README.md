@@ -19,7 +19,9 @@ windbg32 –k net:port=50000,key=2steg4fzbj2sz.23418vzkd4ko3.1g34ou07z4pev.1sp3y
 windbg64 –k net:port=50100,key=2steg4fzbj2sz.23418vzkd4ko3.1g34ou07z4pev.1sp3yo9yz874p
 ```
 
+[书中使用到的所有恶意样本](https://github.com/wqreytuk/Practical_Reverse_Engineering_note/blob/main/malware_samples.zip)
 
+密码是`infected`
 
 
 
