@@ -1,4 +1,4 @@
-[Practical Reverse Engineering notes -- Part I](http://144.34.164.217//practical-reverse-engineering-notes-part-i.html)
+最后进入了0x2E号中断（这里我分析的不对，根本就不会执行中断，而是执行ntdll!KiFastSystemCall中的sysenter，执行完之后就直接返回了，可能是因为处理器的原因，并没有执行ntdll!KiIntSystemCall的代码）[Practical Reverse Engineering notes -- Part I](http://144.34.164.217//practical-reverse-engineering-notes-part-i.html)
 
 目录可能会稍微有点乱，不要介意，凑合看吧
 
@@ -629,7 +629,7 @@ ntdll!KiIntSystemCall:
 77686bc6 c3              ret
 ```
 
-最后进入了0x2E号中断
+最后进入了0x2E号中断（这里我分析的不对，根本就不会执行中断，而是执行ntdll!KiFastSystemCall中的sysenter，执行完之后就直接返回了，可能是因为处理器的原因，并没有执行ntdll!KiIntSystemCall的代码）
 
 ```assembly
 kd> !idt 0x2E
