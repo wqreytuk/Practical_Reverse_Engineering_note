@@ -1,5 +1,3 @@
-最后进入了0x2E号中断（这里我分析的不对，根本就不会执行中断，而是执行ntdll!KiFastSystemCall中的sysenter，执行完之后就直接返回了，可能是因为处理器的原因，并没有执行ntdll!KiIntSystemCall的代码）[Practical Reverse Engineering notes -- Part I](http://144.34.164.217//practical-reverse-engineering-notes-part-i.html)
-
 目录可能会稍微有点乱，不要介意，凑合看吧
 
 ### 约定
@@ -234,7 +232,7 @@ dt nt!_KPRCB
 
 当前处理器的PCR总是可以在内核模式下通过特殊的寄存器访问到
 
-Windows内核中有两个例程可以获取到当前的EPROCESS和ETHREAD结构体
+Windows内核中有两个例程可以获取到当前的KPROCESS和KTHREAD结构体
 
 - PsGetCUrrentProcess
 - PSGetCurrentThread
@@ -258,7 +256,7 @@ fffff800`2ff63779 c3              ret
 
 0x8是CurrentThread在PRCB中的偏移量
 
-因此使用`gs[188h]`就能获取到ETHREAD结构体
+因此使用`gs[188h]`就能获取到KTHREAD结构体
 
 ```assembly
 kd> uf nt!PsGetCurrentProcess
@@ -270,7 +268,7 @@ fffff800`2fec9780 c3              ret
 
 
 
-此时rax已经指向了ETHREAD结构体，然后有取得了ETHREAD结构体0xB8偏移量的值，下面是THREAD结构体的定义
+此时rax已经指向了KTHREAD结构体，然后又取得了KTHREAD结构体0xB8偏移量的值，下面是KTHREAD结构体的定义
 
 ```
 kd> dt nt!_KTHREAD
@@ -315,11 +313,11 @@ kd> dt nt!_KTHREAD
    ...
 ```
 
-首先在THREAD结构体中并没有0xB8这个偏移量，只有0x98，很明显该偏移量是一个union，显然应该是ApcState
+首先在KTHREAD结构体中并没有0xB8这个偏移量，只有0x98，很明显该偏移量是一个union，显然应该是ApcState
 
 ![image-20220728105800239](https://img-blog.csdnimg.cn/16e6734acf1f4fbe84aeacbeaa109af2.png)
 
-再加上0x20的偏移量，正好就是0xB8，进而获取到EPROCESS
+再加上0x20的偏移量，正好就是0xB8，进而获取到KPROCESS
 
 
 
@@ -1219,6 +1217,7 @@ kd> dt nt!_KDPC
 
 
 下面是反编译出来的InsertHeadList函数
+
 ```c
 VOID InsertHeadList(PLIST_ENTRY ListHead, PLIST_ENTRY Entry) {
      PLIST_ENTRY Flink;
@@ -1403,6 +1402,7 @@ fffff803`85c8ab45 48894808        mov     qword ptr [rax+8],rcx
 fffff803`85c8ab49 48897f08        mov     qword ptr [rdi+8],rdi
 fffff803`85c8ab4d 48893f          mov     qword ptr [rdi],rdi
 ```
+
 这是链表删除节点之前的样子
 
 ![image-20220806014007312](https://img-blog.csdnimg.cn/612043081f934c76a7cf9e66acc41b4c.png)
