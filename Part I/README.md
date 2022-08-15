@@ -1,3 +1,5 @@
+[Practical Reverse Engineering notes -- Part I](http://144.34.164.217/practical-reverse-engineering-notes-part-i.html)
+
 目录可能会稍微有点乱，不要介意，凑合看吧
 
 ### 约定
