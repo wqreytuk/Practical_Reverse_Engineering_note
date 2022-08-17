@@ -659,7 +659,364 @@ VOID WorkItem(
 
 
 
-接着做题，下一题是让跟一下几个函数的汇编代码，解释一下他们是怎么工作的，这里我就只做第一个，`IoAllocateWorkItem`函数
+接着做题，下一题是让跟一下几个函数的汇编代码，解释一下他们是怎么工作的，这里我就只做第一个，`IoAllocateWorkItem`函，[题解](https://blog.csdn.net/ma_de_hao_mei_le/article/details/126342522?spm=1001.2014.3001.5501)
+
+
+
+### Asynchronous Procedure Call -- APC
+
+
+
+字面意思就是异步过程调用
+
+APC用于实现很多重要的操作，例如异步IO，线程挂起以及进程终止等操作
+
+
+
+这个东西几乎是没有文档的，[官方的驱动的开发手册](https://docs.microsoft.com/en-us/windows-hardware/drivers/kernel/types-of-apcs)只稍微提了一嘴，并没有提供更详细的东西
+
+不过对于日常的逆向工作，并不用了解太多APC的底层细节
+
+这节将会介绍APC是啥玩意及用法
+
+
+
+#### APC基础
+
+通俗来讲，ACP就是一个运行在特定线程context下的函数
+
+可以被分成用户模式和内核模式，内核模式下的APC又可以被分为normal和special
+
+- normal：运行在PASSIVE_LEVEL下
+- special：运行在APC_LEVEL下
+
+由于APC是运行在线程中的，所以总是会和一个ETHREAD关联
+
+APC的定义如下：
+
+```c
+kd> dt nt!_KAPC
+   +0x000 Type             : UChar
+   +0x001 SpareByte0       : UChar
+   +0x002 Size             : UChar
+   +0x003 SpareByte1       : UChar
+   +0x004 SpareLong0       : Uint4B
+   +0x008 Thread           : Ptr64 _KTHREAD
+   +0x010 ApcListEntry     : _LIST_ENTRY
+   +0x020 KernelRoutine    : Ptr64     void 
+   +0x028 RundownRoutine   : Ptr64     void 
+   +0x030 NormalRoutine    : Ptr64     void 
+   +0x020 Reserved         : [3] Ptr64 Void
+   +0x038 NormalContext    : Ptr64 Void
+   +0x040 SystemArgument1  : Ptr64 Void
+   +0x048 SystemArgument2  : Ptr64 Void
+   +0x050 ApcStateIndex    : Char
+   +0x051 ApcMode          : Char
+   +0x052 Inserted         : UChar
+```
+
+该结构体由KeInitializeApc进行初始化
+
+```c
+NTKERNELAPI VOID KeInitializeApc(
+    PKAPC Apc,
+    PKTHREAD Thread,
+    KAPC_ENVIRONMENT Environment,
+    PKKERNEL_ROUTINE KernelRoutine,
+    PKRUNDOWN_ROUTINE RundownRoutine,
+    PKNORMAL_ROUTINE NormalRoutine,
+    KPROCESSOR_MODE ProcessorMode,
+    PVOID NormalContext
+);
+ 
+NTKERNELAPI BOOLEAN KeInsertQueueApc(
+	PRKAPC Apc,
+	PVOID SystemArgument1,
+	PVOID SystemArgument2,
+	KPRIORITY Increment
+);
+```
+
+Callback prototypes
+
+```
+typedef VOID (*PKKERNEL_ROUTINE)(
+	PKAPC Apc,
+	PKNORMAL_ROUTINE *NormalRoutine,
+	PVOID *NormalContext,
+	PVOID *SystemArgument1,
+	PVOID *SystemArgument2
+);
+typedef VOID (*PKRUNDOWN_ROUTINE)(
+ 	PKAPC Apc
+);
+
+typedef VOID (*PKNORMAL_ROUTINE)(
+    PVOID NormalContext,
+    PVOID SystemArgument1,
+    PVOID SystemArgument2
+);
+
+typedef enum _KAPC_ENVIRONMENT {
+	OriginalApcEnvironment,
+	AttachedApcEnvironment,
+	CurrentApcEnvironment,
+	InsertApcEnvironment
+} KAPC_ENVIRONMENT, *PKAPC_ENVIRONMENT;
+```
+
+
+
+上面的这些定义是没有文档的，书中给出来的是从别的论坛中搞的， 不保熟
+
+
+
+```c
+NTKERNELAPI VOID KeInitializeApc(
+    PKAPC Apc,
+    PKTHREAD Thread,
+    KAPC_ENVIRONMENT Environment,
+    PKKERNEL_ROUTINE KernelRoutine,
+    PKRUNDOWN_ROUTINE RundownRoutine,
+    PKNORMAL_ROUTINE NormalRoutine,
+    KPROCESSOR_MODE ProcessorMode,
+    PVOID NormalContext
+);
+```
+
+参数说明：
+
+- Apc：由调用者分配的一块buffer，从non-paged pool中分配（ExAllocatePool）
+- Thread，该apc所关联的线程
+- Environment：apc的执行环境，例如：OriginalApcEnvironment意味着apc将会运行在线程的进程context中（什么玩意儿，完全看不懂在说啥）
+- KenerlRoutine：在APC_LEVEL下以内核模式执行的函数
+- RundownRoutine：线程终止的时候，该例程将会被执行
+- NormalRoutine：在PASSIVE_LEVEL下以ProcessorMode执行的函数
+
+
+
+在KTHREAD的ApcState成员中有一个ListEntry
+
+```
+kd> dt nt!_KTHREAD
+   ...
+   +0x098 ApcState         : _KAPC_STATE
+   ...
+kd> dt nt!_KAPC_STATE
+   +0x000 ApcListHead      : [2] _LIST_ENTRY
+   +0x020 Process          : Ptr64 _KPROCESS
+   +0x028 KernelApcInProgress : UChar
+   +0x029 KernelApcPending : UChar
+   +0x02a UserApcPending   : UChar
+```
+
+ApcState中存储了两个队列，一个用于内核模式，另一个用于用户模式
+
+
+
+#### 使用APC实现线程挂起操作
+
+
+
+当一个程序想挂起一个线程的时候，内核会把一个APC弄到这个线程里面，准确来说是KTHREAD的SchedulerApc成员
+
+使用KeInitThread函数进行初始化，然后使用KiSchedulerApc函数占用SuspendEvent事件，当程序想恢复这个线程的时候，使用KeResumeThread释放这个事件就行了
+
+
+
+如果你不是在逆向Windows内核或者写内核模式下的RootKit，那么应该是碰不到使用APC的代码的
+
+主要是因为这个东西他没有文档，因此很少在商业驱动中使用
+
+但是在RootKit中，APC使用的相当频繁，因为可以使用APC从内核模式将代码注入到用户模式
+
+RootKit的做法是将一个用户模式的APC加入到他们想要注入的进程的线程的队列中
+
+
+
+这本书真尼玛离谱，啥都没讲，上来就让我写驱动使用APC
+
+
+
+我在网上找到了[这篇文章](https://repnz.github.io/posts/apc/user-apc/)，先来读一下看看
+
+这篇文章中给了一个项目地址，里面有很多APC的用法，相关的代码注释我放到了[这里](https://github.com/wqreytuk/APC)，下面是对其中一些用法的笔记
+
+##### [QueueUserAPC](https://github.com/wqreytuk/APC/blob/main/ApcDllInjector/ApcDllInjector.c#L101)
+
+这个项目中有三个APC选项，这里先来搞一下win32，就是使用微软文档中公开的方法进行APC的插入操作
+
+大概的流程就是在目标进程的虚拟地址空间中开辟出一块内存写入要加载的dll的路径，然后获取到目标进程的一个线程句柄，最后通过QueueUserAPC将一个方法插入到该线程的APC队列中
+
+```c
+if (!QueueUserAPC((PAPCFUNC) LoadLibraryAPtr, ThreadHandle, (ULONG_PTR) RemoteLibraryAddress)
+```
+
+`LoadLibraryAPtr`是要插入的方法，`ThreadHandle`是APC要插入到的线程，`RemoteLibraryAddress`是方法的参数
+
+
+
+这里选择将7z.dll注入到notepad.exe进程中
+
+![image-20220817160324363](https://img-blog.csdnimg.cn/653e764b25e44517878d2a96bbdb2e99.png)
+
+为了调试方便，我在代码中加入了一个判断文件是否存在的代码，通过在debuggee中创建指定文件来触发断点
+
+
+
+![image-20220817160435588](https://img-blog.csdnimg.cn/43018bcaa8f54885bb3d75116ceff904.png)
+
+`ApcDllInjector.exe`执行后会阻塞，循环检测该文件是否存在，这时候启动windbg加载`ApcDllInjector.pdb`并[切换到`ApcDllInjector.exe`进程空间](https://blog.csdn.net/ma_de_hao_mei_le/article/details/126051148)
+
+
+
+在`QueueUserAPC`函数调用完成后，查看notepad.exe进程
+
+![image-20220817160745078](https://img-blog.csdnimg.cn/13bd48daf9454da782f2b66b9ecd300b.png)
+
+获取到线程地址后，使用`!apc`查看该线程中的APC
+
+![image-20220817160851974](https://img-blog.csdnimg.cn/2e0afb5111d6426d9991ac0efb50e3d8.png)
+
+可以清楚地看到这里显示了两个ApcListHead，一个是KERNEL，一个是USER
+
+
+
+其实!apc已经给出了KAPC结构体的地址，但是通过ApcListHead的地址，也可以找到KAPC的地址
+
+根据之前了解到的[通过ListEntry定位结构体地址](https://144.one/practical-reverse-engineering-notes-part-i.html#wozhendehenxihuanmakabaka)的方法，即可计算出KACP的地址为`0xfffffa801bc89720-0x10`
+
+![image-20220817163023402](https://img-blog.csdnimg.cn/f18477dcadf94560a76e5a09935c8c30.png)
+
+![image-20220817163133035](https://img-blog.csdnimg.cn/5a7f51fea9394c81b8d8e2fb9d66535b.png)
+
+可以看到Thread地址是正确的，说明地址计算无误
+
+
+
+KAPC结构体中的NormalContext就是使用QueueUserAPC插入的方法，即`LoadLibraryA`函数
+
+需要切换到目标进程（notepad.exe）来查看该字段
+
+```assembly
+kd> !process 0 0 notepad.exe
+PROCESS fffffa801a19b080
+    SessionId: 1  Cid: 0424    Peb: 7f62186b000  ParentCid: 0ef8
+    DirBase: 1b10b000  ObjectTable: fffff8a0018e15c0  HandleCount: <Data Not Accessible>
+    Image: notepad.exe
+
+kd> .process /i /p /r fffffa801a19b080  
+You need to continue execution (press 'g' <enter>) for the context
+to be switched. When the debugger breaks in again, you will be in
+the new process context.
+kd> g
+Break instruction exception - code 80000003 (first chance)
+nt!DbgBreakPointWithStatus:
+fffff800`79e81930 cc              int     3
+kd> u 0x000007fb`988928ac L 20
+000007fb`988928ac 48895c2408      mov     qword ptr [rsp+8],rbx
+000007fb`988928b1 4889742410      mov     qword ptr [rsp+10h],rsi
+000007fb`988928b6 57              push    rdi
+000007fb`988928b7 4883ec20        sub     rsp,20h
+000007fb`988928bb 488bf9          mov     rdi,rcx
+000007fb`988928be 4885c9          test    rcx,rcx
+000007fb`988928c1 7415            je      000007fb`988928d8
+000007fb`988928c3 488d1556ed0100  lea     rdx,[000007fb`988b1620]
+000007fb`988928ca ff15e8ac1100    call    qword ptr [000007fb`989ad5b8]
+000007fb`988928d0 85c0            test    eax,eax
+000007fb`988928d2 0f84979a0800    je      000007fb`9891c36f
+000007fb`988928d8 4533c0          xor     r8d,r8d
+000007fb`988928db 33d2            xor     edx,edx
+000007fb`988928dd 488bcf          mov     rcx,rdi
+000007fb`988928e0 ff153abf1100    call    qword ptr [000007fb`989ae820]
+000007fb`988928e6 488b5c2430      mov     rbx,qword ptr [rsp+30h]
+000007fb`988928eb 488b742438      mov     rsi,qword ptr [rsp+38h]
+000007fb`988928f0 4883c420        add     rsp,20h
+000007fb`988928f4 5f              pop     rdi
+000007fb`988928f5 c3              ret
+000007fb`988928f6 90              nop
+000007fb`988928f7 90              nop
+000007fb`988928f8 90              nop
+000007fb`988928f9 90              nop
+000007fb`988928fa 90              nop
+000007fb`988928fb 90              nop
+000007fb`988928fc 4883ec28        sub     rsp,28h
+000007fb`98892900 ff156aac1100    call    qword ptr [000007fb`989ad570]
+000007fb`98892906 3d0d0000c0      cmp     eax,0C000000Dh
+000007fb`9889290b 0f84545c0400    je      000007fb`988d8565
+000007fb`98892911 3d590000c0      cmp     eax,0C0000059h
+000007fb`98892916 740a            je      000007fb`98892922
+```
+
+使用IDA查看`kernel32.dll`中的`LoadLibraryA`函数的汇编代码
+
+![image-20220817163544040](https://img-blog.csdnimg.cn/cab87d26bf73420c818a198518fda99f.png)
+
+```
+kd> db /c 1 000007fb`988b1620 L10
+000007fb`988b1620  74  t
+000007fb`988b1621  77  w
+000007fb`988b1622  61  a
+000007fb`988b1623  69  i
+000007fb`988b1624  6e  n
+000007fb`988b1625  5f  _
+000007fb`988b1626  33  3
+000007fb`988b1627  32  2
+000007fb`988b1628  2e  .
+000007fb`988b1629  64  d
+000007fb`988b162a  6c  l
+000007fb`988b162b  6c  l
+000007fb`988b162c  00  .
+000007fb`988b162d  90  .
+000007fb`988b162e  90  .
+000007fb`988b162f  90  .
+```
+
+可以确定`0x000007fb988928ac`就是`LoadLibraryA`函数，插入成功
+
+后面的`SystemArguments1`字段是QueueUserAPC的第三个参数，即传给LoadLibraryA函数的参数
+
+```
+kd> db /c 1 0x00000013`39f00000 L20
+00000013`39f00000  43  C
+00000013`39f00001  3a  :
+00000013`39f00002  5c  \
+00000013`39f00003  50  P
+00000013`39f00004  72  r
+00000013`39f00005  6f  o
+00000013`39f00006  67  g
+00000013`39f00007  72  r
+00000013`39f00008  61  a
+00000013`39f00009  6d  m
+00000013`39f0000a  20   
+00000013`39f0000b  46  F
+00000013`39f0000c  69  i
+00000013`39f0000d  6c  l
+00000013`39f0000e  65  e
+00000013`39f0000f  73  s
+00000013`39f00010  5c  \
+00000013`39f00011  37  7
+00000013`39f00012  2d  -
+00000013`39f00013  5a  Z
+00000013`39f00014  69  i
+00000013`39f00015  70  p
+00000013`39f00016  5c  \
+00000013`39f00017  37  7
+00000013`39f00018  7a  z
+00000013`39f00019  2e  .
+00000013`39f0001a  64  d
+00000013`39f0001b  6c  l
+00000013`39f0001c  6c  l
+00000013`39f0001d  00  .
+00000013`39f0001e  00  .
+00000013`39f0001f  00  .
+```
+
+
+
+没毛病
+
+
 
 
 
