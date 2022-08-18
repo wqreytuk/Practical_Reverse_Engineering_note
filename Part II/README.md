@@ -812,6 +812,59 @@ kd> dt nt!_KAPC_STATE
 
 ApcState中存储了两个队列，一个用于内核模式，另一个用于用户模式
 
+这个在[后面的调试过程中](http://144.34.164.217/practical-reverse-engineering-notes-part-ii.html#makabakayezhendehenxihuanwo)是可以观察到的：
+
+`fffffa801a332b00`为插入APC的线程地址
+
+首先使用windbg的`!apc`命令得到内核模式和用户模式两个队列（链表）的地址，可以看到分别为`fffffa801a332b98`和`fffffa801a332ba8`
+
+```
+kd> !apc thre fffffa801a332b00
+Thread fffffa801a332b00 ApcStateIndex 0 ApcListHead fffffa801a332b98 [KERNEL]
+Thread fffffa801a332b00 ApcStateIndex 0 ApcListHead fffffa801a332ba8 [USER]
+    KAPC @ fffffa801a332090
+      Type           12
+      KernelRoutine  fffff8007a1d4f48 nt!AlpcpFreeBuffer+0
+      RundownRoutine fffff8007a07bc50 nt!ExFreePool+0
+```
+
+下面通过解析结构体来进行验证
+
+```
+dt nt!_KTHREAD fffffa801a332b00
+```
+
+获取到ApcState成员的地址`0xfffffa801a332b98`
+
+```
+kd> dt nt!_KAPC_STATE 0xfffffa801a332b98
+   +0x000 ApcListHead      : [2] _LIST_ENTRY [ 0xfffffa80`1a332b98 - 0xfffffa80`1a332b98 ]
+   +0x020 Process          : 0xfffffa80`1ad56080 _KPROCESS
+   +0x028 KernelApcInProgress : 0 ''
+   +0x029 KernelApcPending : 0 ''
+   +0x02a UserApcPending   : 0 ''
+```
+
+再查看`ApcListHead`，**注意看上面的输出，第二个成员Process的偏移量为0x20，说明ApcListHead长度为0x20，即32bytes，而一个ListEntry结构体只有16字节（Flink+Blink），因此ApcListHead包含两个ListEntry**，这一点从上面输出中的`[2]`也可以体现出来
+
+```
+kd> dt nt!_LIST_ENTRY 0xfffffa80`1a332b98
+ [ 0xfffffa80`1a332b98 - 0xfffffa80`1a332b98 ]
+   +0x000 Flink            : 0xfffffa80`1a332b98 _LIST_ENTRY [ 0xfffffa80`1a332b98 - 0xfffffa80`1a332b98 ]
+   +0x008 Blink            : 0xfffffa80`1a332b98 _LIST_ENTRY [ 0xfffffa80`1a332b98 - 0xfffffa80`1a332b98 ]
+
+kd> dt nt!_LIST_ENTRY (0xfffffa80`1a332b98+0x10)
+ [ 0xfffffa80`1a3320a0 - 0xfffffa80`1a3320a0 ]
+   +0x000 Flink            : 0xfffffa80`1a3320a0 _LIST_ENTRY [ 0xfffffa80`1a332ba8 - 0xfffffa80`1a332ba8 ]
+   +0x008 Blink            : 0xfffffa80`1a3320a0 _LIST_ENTRY [ 0xfffffa80`1a332ba8 - 0xfffffa80`1a332ba8 ]
+```
+
+这两个链表，前者存储内核模式的APC，后者存储用户模式的APC，这里通过Flink获取到用户模式的APC，即KAPC结构体中ListEntry成员的地址`0xfffffa801a3320a0 `，[减去其在KAPC中的偏移量`0x10`](https://144.one/practical-reverse-engineering-notes-part-i.html#wozhendehenxihuanmakabaka)即可得到APC的真正地址`fffffa801a332090`
+
+
+
+
+
 
 
 #### 使用APC实现线程挂起操作
@@ -884,7 +937,7 @@ if (!QueueUserAPC((PAPCFUNC) LoadLibraryAPtr, ThreadHandle, (ULONG_PTR) RemoteLi
 
 其实!apc已经给出了KAPC结构体的地址，但是通过ApcListHead的地址，也可以找到KAPC的地址
 
-根据之前了解到的[通过ListEntry定位结构体地址](https://144.one/practical-reverse-engineering-notes-part-i.html#wozhendehenxihuanmakabaka)的方法，即可计算出KACP的地址为`0xfffffa801bc89720-0x10`
+根据之前了解到的[通过ListEntry定位结构体地址](http://144.34.164.217/practical-reverse-engineering-notes-part-i.html#wozhendehenxihuanmakabaka)的方法，即可计算出KACP的地址为`0xfffffa801bc89720-0x10`
 
 ![image-20220817163023402](https://img-blog.csdnimg.cn/f18477dcadf94560a76e5a09935c8c30.png)
 
@@ -1017,6 +1070,26 @@ kd> db /c 1 0x00000013`39f00000 L20
 没毛病
 
 
+
+##### [NtQueueApcThread](https://github.com/wqreytuk/APC/blob/main/ApcDllInjector/ApcDllInjector.c#L131)
+
+
+
+这个函数会被上面的QueueUserAPC函数调用，调用栈如下：
+
+```
+0033:000007f7`b2131378 ff159a1c0100    call    qword ptr [ApcDllInjector!_imp_QueueUserAPC (000007f7`b2143018)]
+0033:000007f9`4bd63650 48ff2599a91100  jmp     qword ptr [KERNEL32!_imp_QueueUserAPC (000007f9`4be7dff0)]
+0033:000007f9`497ffa88 ff1522950b00    call    qword ptr [KERNELBASE!_imp_NtQueueApcThread (000007f9`498b8fb0)]
+ntdll!NtQueueApcThread:
+0033:000007f9`4c572ff0 4c8bd1          mov     r10,rcx
+```
+
+注意上面的call和jmp指令后面的是取地址，当时看的时候人傻了，以为是直接跳到这个地址上，[闹笑话了](https://citrusice.github.io/)
+
+![image-20220818160405056](https://img-blog.csdnimg.cn/a55d96cb8b6d4524a83d82474aa4bf5a.png)
+
+这是一个没有文档的函数，俗称`Native API`
 
 
 
