@@ -1071,7 +1071,7 @@ kd> db /c 1 0x00000013`39f00000 L20
 
 
 
-##### [NtQueueApcThread](https://github.com/wqreytuk/APC/blob/main/ApcDllInjector/ApcDllInjector.c#L131)
+##### [NtQueueApcThread](https://github.com/wqreytuk/APC/blob/main/ApcDllInjector/ApcDllInjector.c#L134)
 
 
 
@@ -1090,6 +1090,146 @@ ntdll!NtQueueApcThread:
 ![image-20220818160405056](https://img-blog.csdnimg.cn/a55d96cb8b6d4524a83d82474aa4bf5a.png)
 
 这是一个没有文档的函数，俗称`Native API`
+
+
+
+[网上的代码](https://github.com/repnz/apc-research/blob/master/ApcDllInjector/ApcDllInjector.c#L87)好像是有点问题，这个函数`ntdll!NtQueueApcThread`的参数具体要怎么传，需要跟一下QueueUserAPC函数
+
+
+
+下面的代码是`KERNELBASE!QueueUserAPC`函数的汇编代码
+
+```assembly
+0033:000007fc`52b6fa04 4c8bdc          mov     r11,rsp
+0033:000007fc`52b6fa07 49895b08        mov     qword ptr [r11+8],rbx
+0033:000007fc`52b6fa0b 49896b10        mov     qword ptr [r11+10h],rbp
+0033:000007fc`52b6fa0f 49897318        mov     qword ptr [r11+18h],rsi
+0033:000007fc`52b6fa13 57              push    rdi
+0033:000007fc`52b6fa14 4883ec50        sub     rsp,50h
+0033:000007fc`52b6fa18 498363e800      and     qword ptr [r11-18h],0
+0033:000007fc`52b6fa1d 33c0            xor     eax,eax
+0033:000007fc`52b6fa1f 41b901000000    mov     r9d,1
+0033:000007fc`52b6fa25 492143d8        and     qword ptr [r11-28h],rax
+0033:000007fc`52b6fa29 498943f0        mov     qword ptr [r11-10h],rax
+0033:000007fc`52b6fa2d 498d43e8        lea     rax,[r11-18h]
+0033:000007fc`52b6fa31 498bf8          mov     rdi,r8
+0033:000007fc`52b6fa34 488bf2          mov     rsi,rdx
+0033:000007fc`52b6fa37 488be9          mov     rbp,rcx
+0033:000007fc`52b6fa3a 49c743d010000000 mov     qword ptr [r11-30h],10h
+0033:000007fc`52b6fa42 4533c0          xor     r8d,r8d
+0033:000007fc`52b6fa45 33d2            xor     edx,edx
+0033:000007fc`52b6fa47 418bc9          mov     ecx,r9d
+0033:000007fc`52b6fa4a 498943c8        mov     qword ptr [r11-38h],rax
+0033:000007fc`52b6fa4e ff15d48a0b00    call    qword ptr [KERNELBASE!_imp_RtlQueryInformationActivationContext (000007fc`52c28528)]
+0033:000007fc`52b6fa54 8bd8            mov     ebx,eax
+0033:000007fc`52b6fa56 85c0            test    eax,eax
+0033:000007fc`52b6fa58 0f88ae0c0900    js      KERNELBASE!QueueUserAPC+0x90d08 (000007fc`52c0070c)
+0033:000007fc`52b6fa5e 488b442440      mov     rax,qword ptr [rsp+40h]
+0033:000007fc`52b6fa63 f644244801      test    byte ptr [rsp+48h],1
+0033:000007fc`52b6fa68 488b1549950b00  mov     rdx,qword ptr [KERNELBASE!_imp_RtlDispatchAPC (000007fc`52c28fb8)]
+0033:000007fc`52b6fa6f 48c7c1ffffffff  mov     rcx,0FFFFFFFFFFFFFFFFh
+0033:000007fc`52b6fa76 4c8bcf          mov     r9,rdi
+0033:000007fc`52b6fa79 4c8bc5          mov     r8,rbp
+0033:000007fc`52b6fa7c 480f45c1        cmovne  rax,rcx
+0033:000007fc`52b6fa80 488bce          mov     rcx,rsi
+0033:000007fc`52b6fa83 4889442420      mov     qword ptr [rsp+20h],rax
+0033:000007fc`52b6fa88 ff1522950b00    call    qword ptr [KERNELBASE!_imp_NtQueueApcThread (000007fc`52c28fb0)]
+0033:000007fc`52b6fa8e 85c0            test    eax,eax
+0033:000007fc`52b6fa90 0f88e4e10200    js      KERNELBASE!QueueUserAPC+0xa8 (000007fc`52b9dc7a)
+0033:000007fc`52b6fa96 b801000000      mov     eax,1
+0033:000007fc`52b6fa9b 488b5c2460      mov     rbx,qword ptr [rsp+60h]
+0033:000007fc`52b6faa0 488b6c2468      mov     rbp,qword ptr [rsp+68h]
+0033:000007fc`52b6faa5 488b742470      mov     rsi,qword ptr [rsp+70h]
+0033:000007fc`52b6faaa 4883c450        add     rsp,50h
+0033:000007fc`52b6faae 5f              pop     rdi
+0033:000007fc`52b6faaf c3              ret
+```
+
+而这个函数其实就是`ntdll!NtQueueApcThread`，通过查看`KERNELBASE!_imp_NtQueueApcThread`地址`KERNELBASE!_imp_NtQueueApcThread (000007fc52c28fb0)`中的内容可以看到
+
+```assembly
+kd> dq /c 1 000007fc`52c28fb0 L1
+000007fc`52c28fb0  000007fc`557d2ff0
+kd> u 000007fc`557d2ff0
+ntdll!NtQueueApcThread:
+000007fc`557d2ff0 4c8bd1          mov     r10,rcx
+000007fc`557d2ff3 b843000000      mov     eax,43h
+000007fc`557d2ff8 0f05            syscall
+000007fc`557d2ffa c3              ret
+000007fc`557d2ffb 0f1f440000      nop     dword ptr [rax+rax]
+ntdll!NtYieldExecution:
+000007fc`557d3000 4c8bd1          mov     r10,rcx
+000007fc`557d3003 b844000000      mov     eax,44h
+000007fc`557d3008 0f05            syscall
+```
+
+因此QueueUserAPC函数就是对`ntdll!NtQueueApcThread`的封装
+
+
+
+观察指令`call    qword ptr [KERNELBASE!_imp_NtQueueApcThread (000007fc52c28fb0)]`之前的汇编代码，可以发现RCX、RDX、R8、R9都用于给`NtQueueApcThread`传输参数了
+
+另外通过下面的方式测试出`[rsp+20h]`用于传输第五个参数
+
+![image-20220825170357008](https://img-blog.csdnimg.cn/2e3a53d73db544e0b91d52ec346a132a.png)
+
+![image-20220825170337179](https://img-blog.csdnimg.cn/7cc68e373a6649e6b4932fd54347ab99.png)
+
+![image-20220825170250535](https://img-blog.csdnimg.cn/1c71dadd093843c3a69afd54d632e69b.png)
+
+
+
+上面传输的5个参数中
+
+- rcx为QueueUserAPC函数的第二个参数ThreadHandle
+- rdx为`KERNELBASE!_imp_RtlDispatchAPC`地址中的内容，其实就是`ntdll!RtlDispatchAPC`函数的地址
+- r8为QueueUserAPC函数的第一个参数PAPCFUNC函数地址
+- r9为QueueUserAPC函数的第三个参数，即传递给PAPCFUNC函数的参数
+- `[rsp+20h]`通过栈传递的参数，即rax，是一个指针，下面经过分析之后，发现该指针也是传递给PAPCFUNC函数的参数
+
+
+
+在后续的测试过程中，我发现我无法直接使用`GetProcAddress`从ntdll.dll中获取到`RtlDispatchAPC`函数的地址，而且使用PE-bear查看`ntdll.dll`发现其并没有导出`RtlDispatchAPC`函数
+
+经过我的反复测试，在我的测试机上，该函数相对于ntdll.dll基地址的偏移量为`0x65E04`
+
+dll的基地址很容易得到，直接把handle强转为指针即可
+
+![image-20220826142907736](https://img-blog.csdnimg.cn/cd2035f59d5a406296193378574e6c89.png)
+
+![image-20220826143012019](https://img-blog.csdnimg.cn/6963252691df4e99a3f6097d78ebedf5.png)
+
+测试机版本：
+
+![image-20220826142805362](https://img-blog.csdnimg.cn/3ca87be71eaf43e5b33fb362fcb625eb.png)
+
+
+
+关键代码如下：
+
+```c
+ULONG_PTR addr_RtlDispatchAPC;
+// 获取ntdll!RtlDispatchAPC函数的地址，用于作为NtQueueApcThread的第二个参数
+// 由于该函数并非导出函数，因此不能直接使用GetProcAddress，只能通过偏移量进行计算
+// 这个偏移量只针对win8 6.2 9200 x64版本
+addr_RtlDispatchAPC = (ULONG_PTR)(void*)NtdllHandle + 0x65E04;
+printf("this is the address of ntdll!RtlDispatchAPC: \t%p\n", (void*)addr_RtlDispatchAPC);
+
+Status = NtQueueApcThread(
+					ThreadHandle,
+					(void*)addr_RtlDispatchAPC,
+					(PPS_APC_ROUTINE)LoadLibraryAPtr,
+					RemoteLibraryAddress,
+					stack_param_tester);
+```
+
+
+
+检测APC插入是否成功的方式和[上面](http://144.34.164.217/practical-reverse-engineering-notes-part-ii.html#makabakayezhendehenxihuanwo)一样，结果显示，APC插入成功，并且成功传递了**两个参数**
+
+
+
+![image-20220826163120627](https://img-blog.csdnimg.cn/c660d9d50ecf4131af77d6e9ab87056d.png)
 
 
 
